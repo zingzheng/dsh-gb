@@ -1,0 +1,10 @@
+# dsh-gb bundle patch（与 dsh plugin add 自动挂载通道一致的声明）
+#
+# 手动挂载时在 profile 的 cordis.patch.yml 追加：
+#   - insert:
+#       - id: dsh-gb
+#         name: 'dsh-gb'
+# （避免与自动通道重复挂载；二选一即可。）
+- insert:
+    - id: dsh-gb
+      name: 'dsh-gb'
