@@ -200,6 +200,32 @@ check('无桥时导航报错', (await navRes3.json()).error === 'no-bridge');
 const cors = await fetch(`${base}/bridge/state`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:3080', 'access-control-request-method': 'POST' } });
 check('CORS 预检通过', cors.status === 204 && (cors.headers.get('access-control-allow-origin') ?? '') === '*');
 
+// 13. 令牌注入 + 重置：构造时带固定 token；setToken 后旧令牌失效、新令牌生效
+const fixedToken = 'a'.repeat(32);
+const server2 = new PhoneRemoteServer(hooks, { token: fixedToken });
+server2.setPage(phonePageHtml);
+server2.setHost('192.168.1.99');
+await server2.start([7792]);
+const base2 = `http://127.0.0.1:${server2.port}`;
+const info2 = await fetch(`${base2}/info`).then((r) => r.json());
+check('构造注入固定令牌', info2.url.includes(`?t=${fixedToken}`));
+const bad2 = await fetch(`${base2}/?t=${'b'.repeat(32)}`);
+check('错误令牌被拒', bad2.status === 403);
+const nextToken = 'c'.repeat(32);
+server2.setToken(nextToken);
+const old2 = await fetch(`${base2}/?t=${fixedToken}`);
+const new2 = await fetch(`${base2}/?t=${nextToken}`);
+check('重置后旧令牌失效/新令牌生效', old2.status === 403 && new2.status === 200);
+// 11b. 重置断开既有 SSE 连接（phones/bridges 集合清空）
+const sse3 = await fetch(`${base2}/events?t=${nextToken}`, { signal: AbortSignal.timeout(3000) });
+check('重置前 SSE 可连接', sse3.status === 200);
+await new Promise((r) => setTimeout(r, 200));
+check('重置前 SSE 已登记', server2.phones.size > 0, `phones=${server2.phones.size}`);
+server2.setToken('d'.repeat(32));
+await new Promise((r) => setTimeout(r, 200));
+check('重置后旧 SSE 被断开', server2.phones.size === 0, `phones=${server2.phones.size}`);
+server2.close();
+
 server.close();
 console.log(failures === 0 ? '全部通过' : `${failures} 项失败`);
 process.exit(failures === 0 ? 0 : 1);
