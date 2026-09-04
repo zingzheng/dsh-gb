@@ -25,12 +25,15 @@
 |---|---|---|
 | `lib/index.js` | Host 半部入口：LAN 服务器接线、事件监听、同源 `/phone-remote/*` 代理 | **手写**，改动需重启 dsh |
 | `lib/server-core.js` | `PhoneRemoteServer`：LAN HTTP 服务器（页面/SSE/动作 API/令牌/CORS） | **手写**，改动需重启 dsh |
+| `lib/tunnel.js` | `TunnelManager`：cloudflared 运行时下载 + 快速/命名隧道生命周期（退避重启） | **手写**，改动需重启 dsh |
 | `lib/phone-page.js` | 手机页 HTML（Game Boy 风格，单文件） | **手写**，改动需重启 dsh |
 | `lib/client-src.js` | Client 半部源码（设置页 + RootBridge + SessionRelay） | **手写**，改动后必须重打 bundle |
-| `lib/qr.js` | 内置 QR 编码器（零依赖，版本 1-4） | **手写**，改动后必须重打 bundle |
+| `lib/qr.js` | 内置 QR 编码器（零依赖，版本 1-6） | **手写**，改动后必须重打 bundle |
 | `lib/client.js` | **构建产物**（qr.js + client-src.js 拼接成 `__ModuleLoader__.load`） | **禁止手改**；由 `node scripts/build-client.mjs` 生成并**必须提交** |
 | `scripts/build-client.mjs` | client bundle 构建 | 保持零依赖（纯 node） |
-| `test/*.mjs` | 冒烟测试（check-qr / client-bundle / serve / preview） | serve.mjs 与 preview.mjs 直接实例化 `PhoneRemoteServer`，**不依赖 cordis** |
+| `test/*.mjs` | 冒烟测试（check-qr / client-bundle / serve / tunnel / preview） | serve.mjs、preview.mjs 与 tunnel.mjs 直接实例化核心模块，**不依赖 cordis** |
+| `test/fake-cloudflared.mjs` | 假 cloudflared（FAKE_* 环境变量控制输出/退出），供 tunnel.mjs 注入 | 测试桩 |
+| `test/tunnel-live.mjs` | 真机冒烟：下载真实 cloudflared + 快速隧道全链路（需联网，**手动**运行） | 不进自动流程 |
 | `cordis.patch.yml` | 插件自带 bundle patch（与 `dsh plugin add` 自动挂载通道一致） | 勿轻易改动 |
 
 `node_modules/`、`*.tgz` 由 `.gitignore` 排除；`lib/client.js` **不在**忽略列表，
@@ -69,6 +72,16 @@
     手动行**二选一**——同时存在会 `duplicate loader entry id` 启动崩溃。
 11. **数据读取**：会话消息用 `sessionQuery.readSurface()`（`listEvents` 只含元数据，
     没有内容）；标题用 `readTitleSnapshots()`；消息上限 40 条、单条 1200 字符。
+12. **cloudflared 只经 `lib/tunnel.js` 运行时下载**（缓存 `$DSH_HOME/cache/dsh-gb/`）：
+    禁止把二进制入库、禁止 `prepare/install/postinstall` 下载；首次启用需联网，失败
+    置 `failed` 状态并在设置页展示原因；换源走环境变量 `DSH_GB_CLOUDFLARED_URL`。
+13. **控制端点仅回环 + 脱敏**：`/phone-remote/tunnel`（GET/POST）与
+    `/phone-remote/token/reset` 对非回环来源 403 `loopback-only`；
+    `/phone-remote/info` 对非回环来源**必须脱敏**（`url:null` + `restricted:true`），
+    禁止在非回环响应里携带令牌/完整 URL/隧道配置密钥。
+14. **配置持久化**：`$DSH_HOME/dsh-gb.json`（原子写 tmp+rename；损坏时回退默认值，
+    不得让 JSON 错误拖垮插件）。**隧道 URL 是公开的**：页面/SSE/API 的鉴权唯一依赖
+    随机令牌；禁止把 token 写进日志。
 
 ## 3. 改动后验证（提交前必须全绿）
 
@@ -77,12 +90,15 @@ node scripts/build-client.mjs   # 若动过 client 侧
 node test/check-qr.mjs          # QR 编码器 vs node-qrcode / jsQR 交叉校验
 node test/client-bundle.mjs     # client bundle 假装载 + 注册断言
 node test/serve.mjs             # 服务器端到端冒烟（页面/SSE/API/令牌/导航）
+node test/tunnel.mjs            # 隧道管理冒烟（假 cloudflared 桩，不联网）
 ```
 
-- host 半部（index/server-core/phone-page）改动：`node test/serve.mjs` 必须过，
-  并提醒用户**重启 dsh** 才生效；
+- host 半部（index/server-core/phone-page/tunnel）改动：`node test/serve.mjs` 与
+  `node test/tunnel.mjs` 必须过，并提醒用户**重启 dsh** 才生效；
 - client 半部改动：重打 bundle 且 `test/client-bundle.mjs` 过，提醒用户**硬刷新**；
-- 想肉眼验证手机页：`node test/preview.mjs`，打开它打印的带令牌 URL。
+- 想肉眼验证手机页：`node test/preview.mjs`，打开它打印的带令牌 URL；
+- 真机隧道验证：`node test/tunnel-live.mjs`（需联网下载真实 cloudflared，手动运行，
+  不进入自动流程）。
 
 ## 4. 开发环境约定
 
@@ -102,7 +118,19 @@ node test/serve.mjs             # 服务器端到端冒烟（页面/SSE/API/令�
 - 用户可见文案统一「掌机」；页面标题「DSH 掌机」；不要出现旧的
   `dsh-phone-remote` / `dsh-handheld` / `dsh-wand` / 「遥控棒」字样。
 - 端口：7788–7795 自动顺延；`/info` 除 `{ok,port,host,url,phonesOnline,
-  bridgeOnline}` 外还可带服务器诊断字段（`stateReceived` 等），勿删。
+  bridgeOnline}` 外还可带服务器诊断字段（`stateReceived` 等），勿删；`/info` 与
+  `/phone-remote/info` 还会携带 `tunnel` 状态字段（`{state,mode,url,error}`），
+  非回环来源的 `url` 为 null（脱敏），勿改此语义。
+- 公网隧道命名：快速隧道 = cloudflared `--url` 模式（临时地址）；命名隧道 =
+  `tunnel run --token` 模式（固定域名，需 Cloudflare 控制台把公共主机名映射到
+  本机掌机端口，默认 7788）。
+- **SSE 隧道验证铁律**：Cloudflare 快速隧道**缓冲 SSE 数据体、只在连接关闭时一次性
+  flush**（公开证据：cloudflared issue #1449；本机 3 条独立隧道复测 12s 全部 0 字节；
+  2026-09-04）。中间件/隧道对流的"状态码正常但数据不达"是常见陷阱，**必须验证数据体**。
+  手机页因此具备「SSE 4 秒无帧 → 自动降级 `/state` 轮询（2.5s）」；`test/tunnel-live.mjs`
+  用 `/state` 断言普通 JSON 经隧道可达。若未来要隧道内实时流，候选方案：
+  ① 服务器定期主动结束 SSE 连接触发 flush + 客户端自动重连（精确对冲 #1449）；
+  ② WebSocket 通道（CF 对 WS 支持良好）；③ 维持轮询（当前默认，状态屏够用）。
 
 ## 6. Git 与发布
 

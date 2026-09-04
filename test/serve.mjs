@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import os from 'node:os';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const coreSrc = readFileSync(join(root, 'lib', 'server-core.js'), 'utf8');
@@ -58,6 +59,17 @@ function check(name, cond, detail = '') {
 const info = await fetch(`${base}/info`).then((r) => r.json());
 check('/info 返回 url 含令牌', info.ok === true && info.url.includes('t=') && info.port === 7791);
 
+// 1b. 公网地址覆盖（隧道）：/info 的 url 使用隧道地址并保留令牌；隧道状态透传
+server.setPublicBase('https://abc-def.trycloudflare.com');
+const infoT = await fetch(`${base}/info`).then((r) => r.json());
+check('公网地址覆盖后 /info url 为隧道地址且带令牌',
+  String(infoT.url).startsWith('https://abc-def.trycloudflare.com/?t=') && infoT.url.includes(server.token));
+server.setTunnelInfo({ state: 'running', mode: 'quick', url: 'https://abc-def.trycloudflare.com', error: null });
+const infoT2 = await fetch(`${base}/info`).then((r) => r.json());
+check('/info 携带隧道状态', infoT2.tunnel?.state === 'running' && infoT2.tunnel?.url === 'https://abc-def.trycloudflare.com');
+server.setPublicBase(null);
+server.setTunnelInfo(null);
+
 // 2. 页面需要令牌
 const noToken = await fetch(`${base}/`);
 check('无令牌访问 / 被拒', noToken.status === 403);
@@ -106,6 +118,14 @@ const sseText = await new Promise((resolve, reject) => {
 });
 check('SSE 首帧含运行态与增强，标题优先用 Host 实时值（选中 + 列表）', sseText.includes('"status":"running"') && sseText.includes('"sessionTitle":"host-实时标题"') && sseText.includes('"title":"host-实时标题"'));
 check('SSE 首帧包含会话消息（供浏览）', sseText.includes('"messages"') && sseText.includes('好的，这是回答。'));
+
+// 5b. GET /state：轮询降级接口（与 SSE 首帧同构的合并状态）
+const stateRes = await fetch(`${base}/state?t=${server.token}`);
+const stateJson = await stateRes.json();
+check('GET /state 返回合并状态',
+  stateRes.status === 200 && stateJson.connected === true && stateJson.status === 'running' && stateJson.sessionId === 's1');
+const stateBad = await fetch(`${base}/state?t=${'b'.repeat(32)}`);
+check('GET /state 错误令牌被拒', stateBad.status === 403);
 
 // 6. /api send → onSend 收到文本
 const sendRes = await fetch(`${base}/api?t=${server.token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'send', text: '你好' }) });
@@ -225,6 +245,20 @@ server2.setToken('d'.repeat(32));
 await new Promise((r) => setTimeout(r, 200));
 check('重置后旧 SSE 被断开', server2.phones.size === 0, `phones=${server2.phones.size}`);
 server2.close();
+
+// 13. 非回环来源访问 /info 被拒（防令牌泄露）：用本机非回环 IPv4 直连验证
+const lanAddr = Object.values(os.networkInterfaces()).flat()
+  .find((n) => n.family === 'IPv4' && n.internal !== true);
+if (lanAddr !== undefined && lanAddr.address !== '') {
+  try {
+    const lanRes = await fetch(`http://${lanAddr.address}:${server.port}/info`, { signal: AbortSignal.timeout(3000) });
+    check('非回环 /info 被拒(403)', lanRes.status === 403, `addr=${lanAddr.address} status=${lanRes.status}`);
+  } catch {
+    console.log('SKIP 非回环 /info（LAN 地址不可达）');
+  }
+} else {
+  console.log('SKIP 非回环 /info（本机无非回环 IPv4）');
+}
 
 server.close();
 console.log(failures === 0 ? '全部通过' : `${failures} 项失败`);

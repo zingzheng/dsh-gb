@@ -1,6 +1,8 @@
 // QR 编码器交叉验证：
 // 1) 我的矩阵 vs node-qrcode 矩阵（逐模块比较，报告不一致数）
 // 2) 我的矩阵渲染成 RGBA 位图 → jsqr 解码 → 必须还原原始文本（权威判定）
+// 覆盖：版本 1-6（含长短块与非均匀分块）、纠错级 L/M/Q/H、
+// 真实掌机 URL 形态（局域网 + trycloudflare 公网地址，最长 87+ 字节）。
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -32,16 +34,24 @@ function renderRgba(lines, size, scale = 8) {
 }
 
 const samples = [
-  'https://example.com/',
-  'HELLO WORLD',
-  'http://192.168.1.23:7788/?t=0123456789abcdef0123456789abcdef',
-  'dsh-gb-qr-check-42',
-  'http://10.0.0.5:7788/?t=deadbeefcafebabe',
+  { text: 'https://example.com/', ec: 'M' },
+  { text: 'HELLO WORLD', ec: 'M' },
+  { text: 'http://192.168.1.23:7788/?t=0123456789abcdef0123456789abcdef', ec: 'L' },
+  { text: 'dsh-gb-qr-check-42', ec: 'M' },
+  { text: 'http://10.0.0.5:7788/?t=deadbeefcafebabe', ec: 'M' },
+  // 公网隧道形态（用户实测 87 字节触发 v4 上限的复现输入；v5-L 容量 106）
+  { text: 'https://signal-todd-foreign-breed.trycloudflare.com/?t=0123456789abcdef0123456789abcdef', ec: 'L' },
+  // 超长主机名形态（触发 v6-L）
+  { text: 'https://aaaaaaaa-bbbbbbbb-cccccccc-dddddddd.trycloudflare.com/?t=0123456789abcdef0123456789abcdef', ec: 'L' },
+  // 纠错级与分块形态覆盖：单块 / 均匀 4 块 / 非均匀长短块
+  { text: 'dsh-gb-h-hello', ec: 'H' },
+  { text: 'MULTIBLOCK-012', ec: 'H' },
+  { text: 'MULTIBLOCK-HELLO-0123', ec: 'H' },
+  { text: 'HELLO-Q-LEVEL-CHECK', ec: 'Q' },
 ];
 
 let failed = 0;
-for (const text of samples) {
-  const ec = text.length <= 46 ? 'M' : 'L';
+for (const { text, ec } of samples) {
   try {
     const mine = encodeQr(text, ec);
     // node-qrcode 参照矩阵
@@ -84,13 +94,13 @@ for (const text of samples) {
     const decRef = jsQR(refPadded, refDim, refDim);
     console.log(
       `${ok ? 'PASS' : 'FAIL'} 解码="${text.slice(0, 32)}${text.length > 32 ? '…' : ''}" ` +
-      `len=${text.length} v${mine.version} mask${mine.mask} 与node-qrcode差异=${diff < 0 ? 'n/a' : diff}` +
+      `len=${text.length} ec=${ec} v${mine.version} mask${mine.mask} 与node-qrcode差异=${diff < 0 ? 'n/a' : diff}` +
       (dec === null ? ' (jsqr无结果)' : dec.data === text ? '' : ` (解码为 "${dec.data.slice(0, 40)}")`) +
       ` | jsqr-vs-nodeqrcode=${decRef !== null && decRef.data === text ? 'PASS' : decRef === null ? '无结果' : `FAIL(${decRef.data.slice(0, 30)})`}`
     );
   } catch (e) {
     failed++;
-    console.log(`ERROR [${text.slice(0, 24)}…]: ${e.message}`);
+    console.log(`ERROR [${text.slice(0, 24)}…] ${e.message}`);
   }
 }
 process.exit(failed === 0 ? 0 : 1);
