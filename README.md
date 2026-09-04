@@ -6,7 +6,7 @@
   <br /><br />
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
   <a href="https://github.com/zingzheng/dsh-gb/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/zingzheng/dsh-gb" /></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="适配 DSH（本地实测 0.1.1-rc.2）：0.1.1-rc.2+" src="https://img.shields.io/badge/DSH-0.1.1--rc.2%2B-4d6bfe" /></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="适配 DSH（0.1.0-rc.7 与 0.1.1-rc.2 实测）：0.1.0-rc.7+" src="https://img.shields.io/badge/DSH-0.1.0--rc.7%2B-4d6bfe" /></a>
   <br /><br />
   <img alt="局域网" src="https://img.shields.io/badge/-局域网-4d6bfe" />
   <img alt="手机遥控" src="https://img.shields.io/badge/-手机遥控-4d6bfe" />
@@ -37,7 +37,7 @@ DSH 的**外设遥控器 + 小状态屏**——你坐在电脑前，手机随手
 
 **前置**：`dsh web` 能正常运行，Node.js ≥ 20、pnpm ≥ 10、git。
 
-**支持的 DSH 版本**：<img alt="本地实测 0.1.1-rc.2" src="https://img.shields.io/badge/DSH-0.1.1--rc.2%2B-4d6bfe" />
+**支持的 DSH 版本**：<img alt="0.1.0-rc.7 与 0.1.1-rc.2 实测" src="https://img.shields.io/badge/DSH-0.1.0--rc.7%2B-4d6bfe" />
 
 ### 方式一：一条命令
 
@@ -104,6 +104,7 @@ dsh plugin --profile web add github:zingzheng/dsh-gb
 | 现象 | 原因与解决 |
 |---|---|
 | 报 `duplicate loader entry id` / 页面出现两个「掌机」 | 自动挂载与手动行重复：删除 `~/.dsh/profiles/web/cordis.patch.yml` 里 dsh-gb 的 `insert` 行。 |
+| 设置页报「未检测到本地掌机服务」 | 多因版本激活时机导致同源路由未注册：重跑一次安装命令（git 依赖会拉到最新提交）、重启 dsh、硬刷新浏览器。若是在**另一台设备**上访问 GUI（隧道/远程），请确认用的是新版本（含同源 /phone-remote/* 代理与 hostname 扫描）。 |
 | 报 `dsh: command not found` | 先安装 DSH；或 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add github:zingzheng/dsh-gb`。 |
 | 找不到 profile 目录 | 先跑一次 `dsh web` 初始化 `~/.dsh/profiles/web`。 |
 | 手机上打不开页面 / 二维码转圈 | 手机与电脑须在同一局域网；放行 dsh（Node.js）通过 Windows 防火墙（专用网络）；检查路由器是否开了 AP 隔离。 |
